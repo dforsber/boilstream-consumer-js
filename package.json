@@ -1,0 +1,42 @@
+{
+  "name": "@boilstream/consumer",
+  "version": "0.1.0",
+  "description": "BoilStream SSE consumer SDK — real-time Arrow data streaming for browsers and Node.js",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src/"
+  ],
+  "scripts": {
+    "test": "node test/consumer.test.js",
+    "test:browser": "node test/browser.test.js"
+  },
+  "keywords": [
+    "boilstream",
+    "sse",
+    "arrow",
+    "streaming",
+    "real-time",
+    "apache-arrow",
+    "eventsource",
+    "ipc",
+    "flechette"
+  ],
+  "author": "BoilStream",
+  "license": "MIT",
+  "homepage": "https://github.com/dforsber/boilstream-consumer-js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dforsber/boilstream-consumer-js.git"
+  },
+  "dependencies": {
+    "@uwdata/flechette": "^2.2.0",
+    "eventsource": "^3.0.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.50.0"
+  }
+}

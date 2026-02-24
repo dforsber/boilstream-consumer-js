@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>BoilStream Consumer Browser Test</title>
+</head>
+<body>
+  <h1>BoilStream SSE Browser Test</h1>
+  <p>Status: <span id="status">connecting...</span></p>
+  <p>Schema: <span id="schema">-</span></p>
+  <p>Rows: <span id="rows">0</span></p>
+
+  <script type="module">
+    import { tableFromIPC } from "https://cdn.jsdelivr.net/npm/@uwdata/flechette@2/+esm";
+
+    // Read config from URL params
+    const params = new URLSearchParams(location.search);
+    const serverUrl = params.get("SERVER_URL") || "https://localhost:8443";
+    const streamToken = params.get("STREAM_TOKEN");
+
+    if (!streamToken) {
+      document.getElementById("status").textContent = "error";
+      throw new Error("Missing STREAM_TOKEN query param");
+    }
+
+    function decodeBase64(b64) {
+      return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    }
+
+    let totalRows = 0;
+    const url = `${serverUrl}/stream/${streamToken}`;
+    const es = new EventSource(url);
+
+    es.addEventListener("schema", (event) => {
+      try {
+        const table = tableFromIPC(decodeBase64(event.data));
+        const fieldNames = table.schema.fields.map(f => f.name);
+        document.getElementById("schema").textContent = JSON.stringify(fieldNames);
+      } catch (err) {
+        document.getElementById("status").textContent = "error";
+        console.error("Schema decode error:", err);
+      }
+    });
+
+    es.addEventListener("batch", (event) => {
+      try {
+        const table = tableFromIPC(decodeBase64(event.data));
+        totalRows += table.numRows;
+        document.getElementById("rows").textContent = String(totalRows);
+        if (totalRows >= 3) {
+          document.getElementById("status").textContent = "done";
+          es.close();
+        }
+      } catch (err) {
+        document.getElementById("status").textContent = "error";
+        console.error("Batch decode error:", err);
+      }
+    });
+
+    es.onerror = () => {
+      // EventSource fires error on reconnect too; only mark error if we never got data
+      if (totalRows === 0) {
+        setTimeout(() => {
+          if (totalRows === 0 && document.getElementById("status").textContent === "connecting...") {
+            document.getElementById("status").textContent = "error";
+          }
+        }, 20000);
+      }
+    };
+  </script>
+</body>
+</html>
