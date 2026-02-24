@@ -1,5 +1,5 @@
 {
-  "name": "@boilstream/consumer",
+  "name": "boilstream-consumer",
   "version": "0.1.0",
   "description": "BoilStream SSE consumer SDK — real-time Arrow data streaming for browsers and Node.js",
   "type": "module",

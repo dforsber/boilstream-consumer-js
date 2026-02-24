@@ -8,7 +8,7 @@
  * Reconnection with Last-Event-ID is handled automatically by EventSource.
  *
  * @example
- * import { BoilStreamConsumer } from "@boilstream/consumer";
+ * import { BoilStreamConsumer } from "boilstream-consumer";
  * import EventSource from "eventsource"; // Node.js only
  *
  * const consumer = new BoilStreamConsumer("https://host:8443/stream/{token}", {

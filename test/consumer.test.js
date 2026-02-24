@@ -11,7 +11,7 @@
  *   node test/consumer.test.js
  */
 
-import { BoilStreamConsumer } from "../src/index.js";
+import { BoilStreamConsumer } from "boilstream-consumer";
 import { tableFromColumns, columnFromArray, utf8, tableToIPC } from "@uwdata/flechette";
 import { EventSource } from "eventsource";
 

@@ -1,4 +1,4 @@
-# @boilstream/consumer
+# boilstream-consumer
 
 Real-time Arrow data streaming for browsers and Node.js via Server-Sent Events (SSE).
 
@@ -7,7 +7,7 @@ Connects to a [BoilStream](https://boilstream.com) SSE endpoint and delivers dec
 ## Install
 
 ```bash
-npm install @boilstream/consumer
+npm install boilstream-consumer
 ```
 
 ## Quick Start
@@ -15,7 +15,7 @@ npm install @boilstream/consumer
 ### Node.js
 
 ```js
-import { BoilStreamConsumer } from "@boilstream/consumer";
+import { BoilStreamConsumer } from "boilstream-consumer";
 import EventSource from "eventsource";
 
 const consumer = new BoilStreamConsumer("https://host:8443/stream/<token>", {
@@ -32,7 +32,7 @@ consumer.close();
 ### Browser
 
 ```js
-import { BoilStreamConsumer } from "@boilstream/consumer";
+import { BoilStreamConsumer } from "boilstream-consumer";
 
 const consumer = new BoilStreamConsumer("https://host:8443/stream/<token>", {
   onSchema: (schema) => console.log("Fields:", schema.fields.map(f => f.name)),
@@ -70,7 +70,7 @@ Disconnect from the SSE stream.
 Low-level utility: decode a base64-encoded Arrow IPC stream into a flechette `Table`.
 
 ```js
-import { decodeArrowIPC } from "@boilstream/consumer";
+import { decodeArrowIPC } from "boilstream-consumer";
 const table = decodeArrowIPC(base64String);
 ```
 
