@@ -53,6 +53,7 @@ async function runTest() {
   let schemaReceived = false;
   let batchCount = 0;
   let totalRows = 0;
+  const cursorErrors = [];
   let resolve;
   const done = new Promise((r) => {
     resolve = r;
@@ -61,15 +62,17 @@ async function runTest() {
   const consumer = new BoilStreamConsumer(
     `${SERVER_URL}/stream/${STREAM_TOKEN}`,
     {
-      onSchema: (schema) => {
+      onSchema: (schema, cursor) => {
+        if (typeof cursor !== "string" || !cursor.startsWith("r1.")) cursorErrors.push("Schema lacks opaque baseline cursor");
         schemaReceived = true;
         const fieldNames = schema?.fields?.map?.((f) => f.name) ?? schema;
         console.log("  Schema received:", fieldNames);
       },
-      onBatch: (table, batchSeq) => {
+      onBatch: (table, cursor) => {
+        if (typeof cursor !== "string" || !cursor.startsWith("r1.")) cursorErrors.push("Batch lacks opaque cursor");
         batchCount++;
         totalRows += table.numRows;
-        console.log(`  Batch ${batchSeq}: ${table.numRows} rows`);
+        console.log(`  Cursor ${cursor}: ${table.numRows} rows`);
         // Print first few values for debugging
         for (const col of table.schema.fields) {
           const arr = table.getChild(col.name);
@@ -118,7 +121,7 @@ async function runTest() {
   console.log(`  Total rows:      ${totalRows}`);
 
   // Assertions
-  const errors = [];
+  const errors = [...cursorErrors];
   if (!schemaReceived) errors.push("No schema event received");
   if (totalRows < 3) errors.push(`Expected >= 3 rows, got ${totalRows}`);
 

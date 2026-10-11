@@ -6,14 +6,16 @@
  * (pass the `eventsource` polyfill).
  *
  * Reconnection with Last-Event-ID is handled automatically by EventSource.
+ * IDs are opaque strings. Terminal refresh and Arrow decode errors close the
+ * stream; the application must refresh its snapshot before starting again.
  *
  * @example
  * import { BoilStreamConsumer } from "boilstream-consumer";
- * import EventSource from "eventsource"; // Node.js only
+ * import { EventSource } from "eventsource"; // Node.js only
  *
  * const consumer = new BoilStreamConsumer("https://host:8443/stream/{token}", {
  *   onSchema: (schema) => console.log("Schema:", schema),
- *   onBatch: (table, batchSeq) => console.log(`Batch ${batchSeq}: ${table.numRows} rows`),
+ *   onBatch: (table, cursor) => console.log(`Cursor ${cursor}: ${table.numRows} rows`),
  *   onHeartbeat: () => {},
  *   onError: (err) => console.error(err),
  *   EventSource, // pass polyfill for Node.js; omit in browsers
@@ -34,12 +36,7 @@ export class BoilStreamConsumer {
 
   /**
    * @param {string} url - SSE endpoint URL (e.g. "https://host/stream/{token}")
-   * @param {Object} options
-   * @param {Function} [options.onSchema] - Called with flechette schema on schema events
-   * @param {Function} [options.onBatch] - Called with (flechette Table, batchSeq) on batch events
-   * @param {Function} [options.onHeartbeat] - Called on heartbeat events
-   * @param {Function} [options.onError] - Called with error on connection/decode errors
-   * @param {typeof EventSource} [options.EventSource] - EventSource implementation (required in Node.js)
+   * @param {import("./index.js").ConsumerOptions} [options]
    */
   constructor(url, options = {}) {
     this.#url = url;
@@ -47,6 +44,7 @@ export class BoilStreamConsumer {
       onSchema: options.onSchema,
       onBatch: options.onBatch,
       onHeartbeat: options.onHeartbeat,
+      onRefreshRequired: options.onRefreshRequired,
       onError: options.onError,
     };
     this.#EventSourceImpl = options.EventSource || globalThis.EventSource;
@@ -67,41 +65,81 @@ export class BoilStreamConsumer {
   }
 
   #connect() {
-    this.#es = new this.#EventSourceImpl(this.#url);
+    const es = new this.#EventSourceImpl(this.#url);
+    this.#es = es;
 
-    this.#es.addEventListener("schema", (event) => {
-      try {
-        const table = decodeArrowIPC(event.data);
+    es.addEventListener("schema", (event) => {
+      if (this.#es !== es) return;
+      this.#deliverArrow(event, (table, cursor) => {
         this.#schema = table.schema;
-        this.#callbacks.onSchema?.(table.schema);
-      } catch (err) {
-        this.#callbacks.onError?.(err);
-      }
+        this.#callbacks.onSchema?.(table.schema, cursor);
+      });
     });
 
-    this.#es.addEventListener("batch", (event) => {
-      try {
-        const batchSeq = Number(event.lastEventId);
-        const table = decodeArrowIPC(event.data);
-        this.#callbacks.onBatch?.(table, batchSeq);
-      } catch (err) {
-        this.#callbacks.onError?.(err);
-      }
+    es.addEventListener("batch", (event) => {
+      if (this.#es !== es) return;
+      this.#deliverArrow(event, (table, cursor) => {
+        this.#callbacks.onBatch?.(table, cursor);
+      });
     });
 
-    this.#es.addEventListener("heartbeat", () => {
+    es.addEventListener("heartbeat", () => {
+      if (this.#es !== es) return;
       this.#callbacks.onHeartbeat?.();
     });
 
-    this.#es.onerror = (err) => {
+    es.addEventListener("refresh-required", (event) => {
+      if (this.#es !== es) return;
+      // Named terminal events are terminal even if their body is malformed.
+      // Close before parsing or calling application code, which may throw.
+      this.close();
+      let malformed;
+      try {
+        const data = JSON.parse(event.data);
+        if (data?.reason !== "refresh_required") {
+          throw new Error("Invalid refresh-required event reason");
+        }
+      } catch (err) {
+        malformed = err;
+      }
+      try {
+        this.#callbacks.onRefreshRequired?.({ reason: "refresh_required" });
+      } catch (err) {
+        this.#callbacks.onError?.(err);
+      }
+      if (malformed) this.#callbacks.onError?.(malformed);
+    });
+
+    es.onerror = (err) => {
+      if (this.#es !== es) return;
       this.#callbacks.onError?.(err);
-      // EventSource auto-reconnects with Last-Event-ID — no manual logic needed
+      // Ordinary network errors retain EventSource's Last-Event-ID retry.
     };
+  }
+
+  #deliverArrow(event, callback) {
+    let table;
+    try {
+      table = decodeArrowIPC(event.data);
+    } catch (err) {
+      // EventSource may already have advanced Last-Event-ID. Continuing would
+      // silently skip these undecoded rows; refresh the application snapshot.
+      this.close();
+      this.#callbacks.onError?.(err);
+      return;
+    }
+    try {
+      callback(table, event.lastEventId);
+    } catch (err) {
+      // Application callback failures are distinct from invalid Arrow data.
+      this.#callbacks.onError?.(err);
+    }
   }
 
   /** Disconnect from the SSE stream. */
   close() {
-    this.#es?.close();
+    const es = this.#es;
     this.#es = null;
+    es?.close();
   }
 }

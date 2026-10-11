@@ -1,18 +1,22 @@
 {
   "name": "boilstream-consumer",
   "version": "0.1.0",
-  "description": "BoilStream SSE consumer SDK — real-time Arrow data streaming for browsers and Node.js",
+  "description": "BoilStream SSE consumer SDK \u2014 real-time Arrow data streaming for browsers and Node.js",
   "type": "module",
   "main": "src/index.js",
   "exports": {
-    ".": "./src/index.js"
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
   },
   "files": [
     "src/"
   ],
   "scripts": {
     "test": "node test/consumer.test.js",
-    "test:browser": "node test/browser.test.js"
+    "test:browser": "node test/browser.test.js",
+    "test:unit": "node --test test/consumer.unit.test.js"
   },
   "keywords": [
     "boilstream",
@@ -38,5 +42,6 @@
   },
   "devDependencies": {
     "playwright": "^1.50.0"
-  }
+  },
+  "types": "src/index.d.ts"
 }
