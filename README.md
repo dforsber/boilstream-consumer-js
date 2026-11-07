@@ -226,3 +226,29 @@ EventSource transports, and the actual SDK in Chromium/Firefox/WebKit with CORS,
 credential renewal and partial snapshot restart. The public type fixture includes
 both clients. Actual BoilStream server, deployed proxy/TLS, RLS revocation and soak
 remain separate qualification gates.
+
+### Combined browser/server qualification
+
+From the server's `ingestion-agent` directory, with the normal native build paths
+selected, run:
+
+```sh
+make MAKE_DIRENV=0 test-sse-browser SSE_SDK_DIR=/absolute/path/to/boilstream-consumer-js
+```
+
+Install this SDK's locked dependencies and all three Playwright browsers first.
+The target fails when prerequisites are missing. It runs Chromium, Firefox and
+WebKit against a real native BoilStream fixture, with snapshot interruption,
+revoked-token renewal, exact large integers/nulls/duplicates, live application
+commits, callback failure and replay from the previous committed cursor.
+
+The browser app and proxy use loopback HTTP; the proxy verifies the real server's
+TLS certificate and speaks HTTP/2. An untrusted-CA negative control must fail.
+This is local integration evidence, not qualification of browser-facing deployment
+TLS, a production proxy configuration, cluster failover or sustained load.
+
+On 2026-11-07, all three engines passed the combined gate on macOS against the
+SSE server candidate and its existing native build. Each engine checks snapshot
+restart/renewal, live commit, failed application processing and exact replay.
+The server's newer native selection has a separate ingestion-fixture failure;
+these results do not qualify that selection or promote SSE to GA.
