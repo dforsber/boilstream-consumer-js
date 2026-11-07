@@ -252,3 +252,16 @@ SSE server candidate and its existing native build. Each engine checks snapshot
 restart/renewal, live commit, failed application processing and exact replay.
 The server's newer native selection has a separate ingestion-fixture failure;
 these results do not qualify that selection or promote SSE to GA.
+
+The same server target also runs recovery scenarios. To select only those cases:
+
+```sh
+make MAKE_DIRENV=0 test-sse-browser-recovery SSE_SDK_DIR=/absolute/path/to/boilstream-consumer-js
+```
+
+They verify exact replay after a lost connection, a finite retry budget across
+schema-only reconnects, deadlines when a proxy withholds the response body, and
+idle cancellation with server registration cleanup. On macOS, all three engines
+passed these cases and the original three snapshot scenarios. A temporary
+extra-retry mutation failed the real Chromium test and was restored. These are
+bounded failure tests, not sustained-load or cluster-failover qualification.

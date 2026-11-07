@@ -16,7 +16,7 @@ assert.equal(new URL(config.endpoint).hostname, 'localhost');
 assert.equal(new URL(config.endpoint).protocol, 'https:');
 assert.notEqual(process.env.NODE_TLS_REJECT_UNAUTHORIZED, '0', 'TLS verification must remain enabled');
 async function command(command, value) {
-  process.stdout.write(JSON.stringify({ command, value }) + '\n');
+  process.stdout.write(JSON.stringify({ command, value, suite: config.suite ?? 'snapshot' }) + '\n');
   const reply = await input.next();
   assert.ok(!reply.done && JSON.parse(reply.value).ok, 'native fixture command failed');
 }
@@ -35,7 +35,11 @@ const app = createServer((req, res) => {
     res.end('<script type="importmap">{"imports":{"@uwdata/flechette":"/flechette.mjs","eventsource-parser":"/parser/index.js"}}</script>');
   } else { res.writeHead(404); res.end(); }
 });
-let upstream, browser, interruptSnapshot = false, interrupted = 0;
+let upstream, browser, interruptSnapshot = false, interrupted = 0, fault = "none";
+const setFault = value => {
+  assert.ok(["none", "disconnect-schema", "disconnect-schema-always", "stall-body"].includes(value));
+  fault = value;
+};
 const requests = [], preflights = [], responses = [], sessions = new Set();
 // Leave time for child/native cleanup inside the server fixture's 45-second bound.
 const deadline = setTimeout(() => { void browser?.close(); upstream?.destroy(); }, 25000);
@@ -57,8 +61,10 @@ const proxy = createServer((req, res) => {
     responses.push({ method: req.method, status, origin: headers['access-control-allow-origin'], allowed: headers['access-control-allow-headers'] });
     res.writeHead(status, headers);
     res.flushHeaders();
-    if (req.method === 'GET' && status === 200 && interruptSnapshot) {
+    const cutKind = interruptSnapshot ? 'snapshot' : fault.startsWith('disconnect-schema') ? 'schema' : undefined;
+    if (req.method === 'GET' && status === 200 && cutKind) {
       interruptSnapshot = false;
+      if (fault === 'disconnect-schema') fault = 'none';
       let pending = Buffer.alloc(0), cut = false;
       stream.on('data', chunk => {
         if (cut) return;
@@ -69,12 +75,14 @@ const proxy = createServer((req, res) => {
           const frame = pending.subarray(0, end + 2);
           pending = pending.subarray(end + 2);
           res.write(frame);
-          if (frame.toString().startsWith('event: snapshot\n')) {
+          if (frame.toString().startsWith(`event: ${cutKind}\n`)) {
             cut = true; interrupted++; res.end(); stream.close(); return;
           }
         }
       });
       stream.on('end', () => { if (!cut) { res.write(pending); res.end(); } });
+    } else if (req.method === 'GET' && status === 200 && fault === 'stall-body') {
+      stream.pause(); // Model a proxy that sends headers but never flushes its SSE body.
     } else stream.pipe(res); // Ordinary proxy path preserves transport backpressure.
   });
   stream.end();
@@ -98,6 +106,7 @@ try {
   const expected = [null, '11', '11', '9007199254740993'];
   let checks = 0;
   assert.ok(['chromium', 'firefox', 'webkit'].includes(config.browser));
+  assert.ok(['snapshot', 'recovery'].includes(config.suite ?? 'snapshot'));
   for (const [name, engine] of Object.entries({ chromium, firefox, webkit }).filter(([name]) => name === config.browser)) {
     browser = await engine.launch();
     const page = await browser.newPage();
@@ -106,6 +115,14 @@ try {
     const value = 23;
     await page.exposeFunction('appendNative', () => command('append', value));
     await page.goto(origin);
+    if (config.suite === 'recovery') {
+      const { recovery } = await import('./server.recovery.mjs');
+      checks = await recovery(page, endpoint, config.good, requests, setFault);
+      assert.deepEqual(errors, []);
+      process.stderr.write(`${name} ${browser.version()}: disconnect replay, retry exhaustion, stalled proxy, disposal PASS\n`);
+      await browser.close(); browser = undefined;
+      continue;
+    }
     interruptSnapshot = true;
     const requestStart = requests.length;
     const result = await page.evaluate(async ({ endpoint, bad, good }) => {
@@ -175,7 +192,7 @@ try {
     process.stderr.write(`${name} ${browser.version()}: snapshot restart/renewal, live commit, app failure, replay PASS\n`);
     await browser.close(); browser = undefined;
   }
-  assert.equal(interrupted, 1);
+  assert.equal(interrupted, config.suite === 'recovery' ? 4 : 1);
   assert.equal(checks, 4);
   await command('complete', checks);
 } catch (error) {
