@@ -32,3 +32,23 @@ test('number conversion is an explicit override for safe int64 values', () => {
   const table = decode({ exact: BigInt64Array.from([11n, -7n]) }, { useBigInt: false });
   assert.deepEqual([...table.getChild('exact')], [11, -7]);
 });
+
+
+test('malformed base64 and truncated IPC cannot become an acknowledged empty table', () => {
+  const stream = Buffer.from(tableToIPC(tableFromArrays({ value: [1, null, 1] }), 'stream'));
+  const encoded = stream.toString('base64');
+  for (const payload of ['', 'invalid-arrow', encoded + '\n', '!!!!', 'AA=A',
+    stream.subarray(0, -1).toString('base64'),
+    stream.subarray(0, -8).toString('base64'),
+    Buffer.from('ffffffff00000000ffffffff00000000', 'hex').toString('base64'),
+    Buffer.alloc(16 * 1024 * 1024 + 1).toString('base64'),
+  ]) assert.throws(() => decodeArrowIPC(payload));
+  assert.deepEqual([...decodeArrowIPC(encoded).getChild('value')], [1, null, 1]);
+});
+
+test('an independently encoded empty schema remains a valid empty table', () => {
+  const table = tableFromArrays({ value: BigInt64Array.from([1n]) }).slice(0, 0);
+  const decoded = decodeArrowIPC(Buffer.from(tableToIPC(table, 'stream')).toString('base64'));
+  assert.equal(decoded.numRows, 0);
+  assert.equal(decoded.schema.fields[0].name, 'value');
+});
