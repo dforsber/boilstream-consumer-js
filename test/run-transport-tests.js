@@ -19,9 +19,9 @@ try {
   const env = { ...process.env, SSE_TEST_CERT: cert, SSE_TEST_KEY: key };
   delete env.NODE_TLS_REJECT_UNAUTHORIZED;
   delete env.NODE_EXTRA_CA_CERTS;
-  run(process.execPath, ['--test', 'test/transport.integration.test.js'],
+  run(process.execPath, ['--test', 'test/transport.integration.test.js', 'test/snapshot.integration.test.js'],
     { ...env, SSE_TEST_UNTRUSTED: '1' });
-  run(process.execPath, ['--test', 'test/transport.integration.test.js'],
+  run(process.execPath, ['--test', 'test/transport.integration.test.js', 'test/snapshot.integration.test.js'],
     { ...env, NODE_EXTRA_CA_CERTS: cert });
 } finally {
   rmSync(dir, { recursive: true, force: true });

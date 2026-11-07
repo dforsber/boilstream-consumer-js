@@ -26,3 +26,40 @@ export declare class BoilStreamConsumer {
   close(): void;
 }
 export declare function decodeArrowIPC(base64Data: string, options?: ExtractionOptions): Table;
+
+/** Experimental v2 client; requires a server explicitly advertising SSE v2. */
+export interface SnapshotConsumerOptions {
+  getToken: (context: { signal: AbortSignal; unauthorized: boolean }) => string | Promise<string>;
+  /** Must correspond to already committed application state, never provisional rows. */
+  cursor?: ReplayCursor;
+  onSnapshotStart: (context: { signal: AbortSignal }) => void | Promise<void>;
+  onSnapshot: (table: Table, context: { signal: AbortSignal }) => void | Promise<void>;
+  /** Atomically activate the staged state and persist this cursor. */
+  onSnapshotComplete: (cursor: ReplayCursor, context: { signal: AbortSignal }) => void | Promise<void>;
+  onSnapshotDiscard: () => void | Promise<void>;
+  /** Apply effects and persist cursor together; retries can redeliver unapplied data. */
+  onBatch: (table: Table, cursor: ReplayCursor, context: { signal: AbortSignal }) => void | Promise<void>;
+  /** Discard/invalidate the previously active state on terminal failure. */
+  onRefreshRequired: (details: RefreshRequired) => void | Promise<void>;
+  onSchema?: (schema: Schema, cursor: ReplayCursor | undefined) => void | Promise<void>;
+  arrowOptions?: ExtractionOptions;
+  fetch?: typeof globalThis.fetch;
+  maxRetries?: number;
+  retryMinMs?: number;
+  retryMaxMs?: number;
+  ioTimeoutMs?: number;
+  maxEventChars?: number;
+}
+export declare class StreamError extends Error {
+  readonly code: string;
+  constructor(code: string);
+}
+export declare class BoilStreamSnapshotConsumer {
+  constructor(url: string, options: SnapshotConsumerOptions);
+  get cursor(): ReplayCursor | undefined;
+  get schema(): Schema | null;
+  /** Single use. Resolves on close, rejects with StreamError on terminal failure. */
+  run(): Promise<void>;
+  /** Aborts network I/O; run waits for the current application callback to settle. */
+  close(): void;
+}

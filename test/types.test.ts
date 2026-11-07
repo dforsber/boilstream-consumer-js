@@ -16,3 +16,23 @@ new BoilStreamConsumer("https://example.invalid", {
     void [exact, rows, numeric];
   },
 });
+
+
+import { BoilStreamSnapshotConsumer, StreamError, type SnapshotConsumerOptions } from "boilstream-consumer";
+const snapshotOptions: SnapshotConsumerOptions = {
+  getToken: async ({ signal, unauthorized }) => { void [signal.aborted, unauthorized]; return "a".repeat(64); },
+  onSnapshotStart: async ({ signal }) => { void signal; },
+  onSnapshot: async (table, { signal }) => { const rows: number = table.numRows; void [rows, signal]; },
+  onSnapshotComplete: async (cursor, { signal }) => { const exact: string = cursor; void [exact, signal]; },
+  onSnapshotDiscard: async () => {},
+  onBatch: async (table, cursor, { signal }) => { void [table.numRows, cursor, signal]; },
+  onRefreshRequired: async ({ reason }) => { const refresh: "refresh_required" = reason; void refresh; },
+  onSchema: async (schema, cursor) => { const exact: string | undefined = cursor; void [schema.fields, exact]; },
+};
+const snapshot = new BoilStreamSnapshotConsumer("https://example.invalid/stream/v2", snapshotOptions);
+const running: Promise<void> = snapshot.run();
+const committed: string | undefined = snapshot.cursor;
+const errorCode: string = new StreamError("protocol_failed").code;
+void [running, committed, errorCode];
+// @ts-expect-error Snapshot activation and refresh callbacks are required.
+new BoilStreamSnapshotConsumer("https://example.invalid/stream/v2", { getToken: () => "a".repeat(64) });

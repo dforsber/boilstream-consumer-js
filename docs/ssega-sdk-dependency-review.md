@@ -47,3 +47,43 @@ npm audit pass. Upstream flechette getFactory has an implicit-any declaration;
 Verdict: pass maintenance merge. Deployed TLS/CORS/proxy, actual server policy,
 snapshot handoff, renewal and soak remain required before SSE GA. No npm release
 or server release is asserted by this document.
+
+
+## SSEGA.5 v2 candidate — inline author review 1: delivery and cancellation
+
+Reviewed staged snapshot, empty snapshot, replay from persisted state, partial EOF,
+async commit and queued delivery. Cursor changes only after successful activation
+or live callback completion; reconnect uses that exact committed cursor. An initial
+EOF discards provisional rows before restarting without a cursor. Found that close
+inside a failing callback could hide the callback failure; now only cancellation
+of external I/O resolves quietly. TLS regressions prove failed commits invalidate,
+successful in-flight commits finish, and later queued data is suppressed. Callback
+atomicity belongs to the application store and is documented. No exactly-once claim.
+
+## SSEGA.5 v2 candidate — inline author review 2: credential and resource safety
+
+Reviewed endpoint parsing, TLS, redirect policy,401/403 behavior, renewals, retries,
+provider hangs, parser buffers and error redaction. Authorization headers only;
+redirects refused; temporary CA tests reject untrusted TLS before any HTTP request.
+One401 renewal, permanent refusal stops, bounded retries and provider/read deadlines.
+Parser is the maintained eventsource-parser4.1.3, fed in 16KiB slices with awaited
+callbacks before feeding/reading more. Malformed base64 could formerly become an
+empty Flechette table; added framing/schema checks and exact decoded 16MiB bound.
+Regression fixtures include truncation, absent schema, invalid base64 and oversized
+payloads. This is bounded transport validation, not a full FlatBuffers verifier.
+Application callbacks must settle cooperatively: abandoning an in-flight app commit
+would make its cursor ambiguous, so close intentionally waits for it.
+
+## SSEGA.5 v2 candidate — inline author review 3: libraries and actual runtimes
+
+Keep SSE, Flechette and maintained parser. Fetch supplies headers, cancellation
+and explicit application commits that native EventSource cannot provide. Actual
+browser tests caught Fetch's receiver binding requirement; binding to globalThis
+fixed it in all three engines. Flechette remains pinned to 2.7.1, npm latest stable
+rechecked 2026-11-07. Independent Apache Arrow tests retain exact nullable duplicates,
+int64, decimal scale and timestamp units. Local evidence: 15 unit/interop tests,
+25 TLS tests (2 untrusted +23 trusted), six browser cases (legacy/v2 across three
+engines), public types and dependency audit. Browser fixtures use local HTTP; TLS
+has independent Node transport evidence. Actual server and deployed TLS/browser
+qualification are pending. Client remains explicitly experimental until those
+contracts, security and operational gates pass; no npm publication.

@@ -121,23 +121,22 @@ MIT
 
 ## Production status and dependency policy
 
-This SDK still uses the legacy live-only endpoint. A schema cursor is a live
+`BoilStreamConsumer` uses the legacy live-only endpoint. A schema cursor is a live
 baseline, **not a delivered initial snapshot**. Separately querying a snapshot
 and opening this endpoint does not guarantee a gap-free handoff. Do not claim
 exactly-once delivery or durable application acknowledgements.
 
 Dependencies are pinned with a committed lockfile: EventSource 5.1.4,
 flechette 2.7.1 and Playwright 1.65.0 (checked 2026-11-07). Use `npm ci` for
-repeatable qualification. EventSource brings the maintained eventsource-parser.
+repeatable qualification. The v2 client directly pins eventsource-parser 4.1.3.
 The TLS transport tests use the actual installed EventSource and Arrow decoder,
 a temporary trusted test CA, fragmented socket delivery, reconnect IDs and
 terminal failures. They also prove an untrusted certificate is rejected. They
 do not qualify server authorization, the production proxy, or real browsers.
 
-Keep SSE for one-way browser updates. The next protocol should use Fetch plus
+Keep SSE for one-way browser updates. The experimental v2 client uses Fetch plus
 `eventsource-parser`, header credentials, explicit application-committed resume
-IDs, bounded parsing/retry and staged snapshot completion. This solves limits of
-the native EventSource API without replacing SSE with WebSockets. Keep flechette
+IDs, bounded parsing/retry and staged snapshot completion. Keep flechette
 unless cross-language Arrow fixtures expose unsupported types or compression.
 Bulk analytical reads belong on the binary query interfaces; base64 SSE adds
 about one third to Arrow payload size before HTTP compression.
@@ -160,3 +159,70 @@ closure. This local HTTP fixture does not replace the deployed TLS/browser gate.
 `npm run test:types` checks this SDK's public types with dependency declaration
 checking disabled: flechette 2.7.1 currently declares an untyped `getFactory`
 member. Keep that upstream typing limitation visible when upgrading the decoder.
+
+
+## Experimental snapshot client (SSE v2)
+
+`BoilStreamSnapshotConsumer` requires the new server `/stream/v2` endpoint and an
+explicit `x-boilstream-sse-version: 2` response. It refuses the legacy endpoint.
+The server candidate is still undergoing native/security qualification; this
+export does not declare SSE GA. No npm publication is included in this change.
+
+```js
+import { BoilStreamSnapshotConsumer } from 'boilstream-consumer';
+
+// Supply an application store with the atomic operations described below.
+export function subscribe(viewStore, getToken) {
+  return new BoilStreamSnapshotConsumer('https://api.example.com/stream/v2', {
+    getToken, // async ({ signal, unauthorized }) => currentOrRenewedToken
+    cursor: viewStore.committedCursor,
+    onSnapshotStart: ({ signal }) => viewStore.beginStaging(signal),
+    onSnapshot: (table, { signal }) => viewStore.stage(table, signal),
+    onSnapshotComplete: (cursor, { signal }) => viewStore.activateStaging(cursor, signal),
+    onSnapshotDiscard: () => viewStore.discardStaging(),
+    onBatch: (table, cursor, { signal }) => viewStore.applyAndSaveCursor(table, cursor, signal),
+    onRefreshRequired: () => viewStore.invalidate(),
+  });
+}
+// const consumer = subscribe(store, tokenProvider);
+// await consumer.run(); // resolves after close(); rejects with redacted StreamError
+```
+
+The store must stage rows separately from the active view. `activateStaging`
+atomically replaces that view and saves its cursor; `applyAndSaveCursor` applies a
+live batch and its cursor in one transaction. Returning successfully acknowledges
+that work. If a callback throws, the client stops and invalidates the view. Keep
+application staging bounded (for example in IndexedDB) rather than accumulating
+an unlimited snapshot in browser memory. Snapshot retries discard staging and
+start from scratch. A supplied `cursor` must match already committed application
+state; persisting only the cursor can lose data. This is not an exactly-once side
+effect guarantee.
+
+Only one callback runs at a time. `close()` aborts network I/O, but waits for the
+active application callback to settle; it cannot forcibly cancel arbitrary app
+code. Callbacks receive an abort signal and must settle cooperatively. A successful
+in-flight commit is retained even if close was requested; later queued events are
+suppressed. Observe the `run()` promise and its `StreamError.code`.
+
+Tokens travel only in Authorization headers. The provider is called for each
+connection and receives `unauthorized: true` for one renewal attempt after 401.
+Keep renewed tokens in the provider's own session state. Two consecutive 401
+responses stop the client. TLS verification remains enabled; redirects are refused,
+credentials/cookies are omitted, and endpoint queries/userinfo are rejected.
+For cross-origin deployments allow Authorization and Last-Event-ID in preflight
+and expose `x-boilstream-sse-version` on responses, including CORS on error responses.
+
+Defaults: eight consecutive retries without committed progress, jittered backoff
+from 500ms to 30s, 30s per token/network read, 24MiB maximum partial event text,
+16MiB decoded IPC payload, and 256 queued events per bounded parser feed. Retry
+hints are capped. Successful application commits reset the retry budget. Protocol,
+decode and permanent HTTP failures invalidate state instead of reconnecting.
+Legacy and v2 accept complete modern Arrow IPC streams; malformed base64, missing
+stream framing, oversized payloads or absent schema fail closed. This does not
+claim exhaustive validation of hostile FlatBuffers internals or every Arrow type.
+
+Local verification uses independent Apache Arrow JS encoding, actual TLS Fetch and
+EventSource transports, and the actual SDK in Chromium/Firefox/WebKit with CORS,
+credential renewal and partial snapshot restart. The public type fixture includes
+both clients. Actual BoilStream server, deployed proxy/TLS, RLS revocation and soak
+remain separate qualification gates.
