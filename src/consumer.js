@@ -33,6 +33,7 @@ export class BoilStreamConsumer {
   #EventSourceImpl;
   #es;
   #schema;
+  #arrowOptions;
 
   /**
    * @param {string} url - SSE endpoint URL (e.g. "https://host/stream/{token}")
@@ -49,6 +50,7 @@ export class BoilStreamConsumer {
     };
     this.#EventSourceImpl = options.EventSource || globalThis.EventSource;
     this.#schema = null;
+    this.#arrowOptions = options.arrowOptions;
 
     if (!this.#EventSourceImpl) {
       throw new Error(
@@ -72,14 +74,14 @@ export class BoilStreamConsumer {
       if (this.#es !== es) return;
       this.#deliverArrow(event, (table, cursor) => {
         this.#schema = table.schema;
-        this.#callbacks.onSchema?.(table.schema, cursor);
+        return this.#callbacks.onSchema?.(table.schema, cursor);
       });
     });
 
     es.addEventListener("batch", (event) => {
       if (this.#es !== es) return;
       this.#deliverArrow(event, (table, cursor) => {
-        this.#callbacks.onBatch?.(table, cursor);
+        return this.#callbacks.onBatch?.(table, cursor);
       });
     });
 
@@ -120,7 +122,7 @@ export class BoilStreamConsumer {
   #deliverArrow(event, callback) {
     let table;
     try {
-      table = decodeArrowIPC(event.data);
+      table = decodeArrowIPC(event.data, this.#arrowOptions);
     } catch (err) {
       // EventSource may already have advanced Last-Event-ID. Continuing would
       // silently skip these undecoded rows; refresh the application snapshot.
@@ -129,9 +131,17 @@ export class BoilStreamConsumer {
       return;
     }
     try {
-      callback(table, event.lastEventId);
+      const result = callback(table, event.lastEventId);
+      if (result != null && typeof result.then === "function") {
+        // EventSource cannot await application acknowledgement. Consume any
+        // rejection, then fail closed before another already queued event.
+        Promise.resolve(result).catch(() => {});
+        throw new TypeError("EventSource callbacks must be synchronous; refresh the snapshot before restarting");
+      }
     } catch (err) {
-      // Application callback failures are distinct from invalid Arrow data.
+      // The browser has already advanced its cursor. Continuing after a failed
+      // application update could permanently skip data on reconnect.
+      this.close();
       this.#callbacks.onError?.(err);
     }
   }

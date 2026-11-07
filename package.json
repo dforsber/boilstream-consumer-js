@@ -1,7 +1,7 @@
 {
   "name": "boilstream-consumer",
-  "version": "0.1.0",
-  "description": "BoilStream SSE consumer SDK \u2014 real-time Arrow data streaming for browsers and Node.js",
+  "version": "0.2.0",
+  "description": "BoilStream SSE consumer SDK — real-time Arrow data streaming for browsers and Node.js",
   "type": "module",
   "main": "src/index.js",
   "exports": {
@@ -16,7 +16,10 @@
   "scripts": {
     "test": "node test/consumer.test.js",
     "test:browser": "node test/browser.test.js",
-    "test:unit": "node --test test/consumer.unit.test.js"
+    "test:unit": "node --test test/consumer.unit.test.js test/decoder.interop.test.js",
+    "test:integration": "node test/run-transport-tests.js",
+    "test:types": "tsc --noEmit --strict --skipLibCheck --module nodenext --target es2022 test/types.test.ts",
+    "test:browser:fixture": "node --test test/browser.fixture.test.js"
   },
   "keywords": [
     "boilstream",
@@ -37,11 +40,16 @@
     "url": "https://github.com/dforsber/boilstream-consumer-js.git"
   },
   "dependencies": {
-    "@uwdata/flechette": "^2.2.0",
-    "eventsource": "^3.0.0"
+    "@uwdata/flechette": "2.7.1",
+    "eventsource": "5.1.4"
   },
   "devDependencies": {
-    "playwright": "^1.50.0"
+    "apache-arrow": "21.2.0",
+    "playwright": "1.65.0",
+    "typescript": "7.0.2"
   },
-  "types": "src/index.d.ts"
+  "types": "src/index.d.ts",
+  "engines": {
+    "node": ">=22.12.0"
+  }
 }

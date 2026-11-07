@@ -111,22 +111,35 @@ test("invalid schema or batch IPC closes before error and cannot skip to a later
   }
 });
 
-test("application callback failures are distinct from Arrow decoding failure", () => {
-  const failure = new Error("application callback failed");
-  const errors = [], delivered = [];
-  const { consumer, source } = fixture({
-    onSchema: () => { throw failure; },
-    onBatch: (table, cursor) => { delivered.push([rows(table), cursor]); throw failure; },
-    onError: (error) => errors.push(error),
+test("application callback failures close before reporting and suppress queued data", () => {
+  for (const type of ["schema", "batch"]) {
+    const failure = new Error("application callback failed");
+    const errors = [];
+    let delivered = 0;
+    const fail = () => { delivered++; throw failure; };
+    const { source } = fixture({
+      onSchema: fail, onBatch: fail,
+      onError: (error) => { assert.equal(source.closed, true); errors.push(error); },
+    });
+    source.emit(type, ipc, "r1.failed");
+    source.emit("batch", ipc, "r1.later");
+    assert.equal(delivered, 1);
+    assert.deepEqual(errors, [failure]);
+  }
+});
+
+test("async callbacks fail closed without an unhandled rejection", async () => {
+  const errors = [];
+  const { source } = fixture({
+    onBatch: async () => { throw new Error("async application failure"); },
+    onError: error => errors.push(error),
   });
-  source.emit("schema", ipc, "r1.baseline");
-  source.emit("batch", ipc, "r1.first");
-  source.emit("batch", ipc, "r1.second");
-  assert.equal(source.closed, false);
-  assert.ok(consumer.schema);
-  assert.deepEqual(delivered, [[[11, 11, 33], "r1.first"], [[11, 11, 33], "r1.second"]]);
-  assert.deepEqual(errors, [failure, failure, failure]);
-  consumer.close();
+  source.emit("batch", ipc, "r1.failed");
+  source.emit("batch", ipc, "r1.later");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(source.closed, true);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /must be synchronous/);
 });
 
 test("ordinary network failures preserve EventSource retry and subsequent delivery", () => {

@@ -4,10 +4,10 @@
  * BoilStream Consumer Browser Test (Playwright)
  *
  * Verifies the SDK works in a real browser environment.
- * Uses a local proxy to handle self-signed TLS certificates.
+ * Uses a local proxy with normal TLS verification. Configure a trusted CA.
  *
  * Usage:
- *   NODE_TLS_REJECT_UNAUTHORIZED=0 \
+ *   NODE_EXTRA_CA_CERTS=/path/to/test-ca.pem \
  *   STREAM_TOKEN=<hex> INGEST_TOKEN=<hex> \
  *   node test/browser.test.js
  */
@@ -34,7 +34,7 @@ if (!STREAM_TOKEN || !INGEST_TOKEN) {
 }
 
 // Local server that serves the test HTML page AND proxies SSE requests
-// This avoids browser self-signed cert issues with EventSource
+// The proxy must trust the upstream CA; never disable certificate verification.
 function startServer() {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
@@ -50,7 +50,7 @@ function startServer() {
             Accept: "text/event-stream",
             "Cache-Control": "no-cache",
           },
-          rejectUnauthorized: false, // Accept self-signed certs
+          rejectUnauthorized: true,
         };
 
         // Forward Last-Event-ID if present
@@ -80,7 +80,7 @@ function startServer() {
       }
 
       // Serve the test HTML page
-      const filePath = path.join(__dirname, "browser-test.html");
+      const filePath = path.join(__dirname, "../examples/browser-test.html");
       const content = fs.readFileSync(filePath, "utf-8");
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(content);
@@ -136,7 +136,7 @@ async function runBrowserTest() {
 
     // Navigate to test page — SSE connects through the local proxy, not directly to HTTPS
     const testUrl = `${localUrl}/?SERVER_URL=${encodeURIComponent(localUrl)}&STREAM_TOKEN=${STREAM_TOKEN}`;
-    console.log(`  Opening browser at ${testUrl}`);
+    console.log("  Opening browser test page (credentials redacted)");
     await page.goto(testUrl);
 
     // Wait for consumer to register, then ingest data

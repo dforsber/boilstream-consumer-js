@@ -12,6 +12,9 @@ npm install boilstream-consumer
 
 ## Quick Start
 
+The repository candidate is 0.2.0 (legacy SSE protocol); this change does not publish it to npm.
+Requires Node.js 22.12 or later when using the Node EventSource implementation.
+
 ### Node.js
 
 ```js
@@ -92,12 +95,15 @@ const table = decodeArrowIPC(base64String);
 
 On `refresh-required`, the SDK closes **before** parsing or invoking application code, even if the control body is malformed or the callback throws. `onRefreshRequired` still receives the generic refresh reason on malformed input; `onError` also receives the parsing/validation error. Events queued before closure are ignored. Obtain a fresh canonical snapshot and start a new subscription according to your application's reconciliation flow; do not blindly retry the rejected cursor. As with any network protocol, connection loss can prevent delivery of the terminal event.
 
-Arrow decode failures also close before `onError`: EventSource may already have advanced its internal ID, so continuing could silently skip unread rows. These failures require snapshot refresh. Exceptions thrown by your own schema/batch callbacks are reported through `onError` without being mistaken for a decoder failure. Ordinary network errors retain EventSource's automatic retry behavior.
+Arrow decode failures also close before `onError`: EventSource may already have advanced its internal ID, so continuing could silently skip unread rows. These failures require snapshot refresh. Exceptions thrown by schema/batch callbacks also close the stream before `onError`; the application must refresh. These callbacks must finish synchronously. Returning a Promise closes the stream because EventSource cannot wait for application acknowledgement. Ordinary network errors retain EventSource's automatic retry behavior.
 
 ## Focused tests
 
 ```sh
+npm ci
 npm run test:unit
+npm run test:integration
+npm audit
 ```
 
 These tests use the actual SDK and Arrow IPC decoder with controlled EventSource delivery. They cover exact IDs, decoded duplicate rows, terminal/malformed controls, queued events, decoder failures and callback errors without a running server. `npm test` remains the separately configured live-server integration test; unit success does not qualify that integration.
@@ -112,3 +118,45 @@ TypeScript declarations are included. `test/types.test.ts` checks both browser a
 ## License
 
 MIT
+
+## Production status and dependency policy
+
+This SDK still uses the legacy live-only endpoint. A schema cursor is a live
+baseline, **not a delivered initial snapshot**. Separately querying a snapshot
+and opening this endpoint does not guarantee a gap-free handoff. Do not claim
+exactly-once delivery or durable application acknowledgements.
+
+Dependencies are pinned with a committed lockfile: EventSource 5.1.4,
+flechette 2.7.1 and Playwright 1.65.0 (checked 2026-11-07). Use `npm ci` for
+repeatable qualification. EventSource brings the maintained eventsource-parser.
+The TLS transport tests use the actual installed EventSource and Arrow decoder,
+a temporary trusted test CA, fragmented socket delivery, reconnect IDs and
+terminal failures. They also prove an untrusted certificate is rejected. They
+do not qualify server authorization, the production proxy, or real browsers.
+
+Keep SSE for one-way browser updates. The next protocol should use Fetch plus
+`eventsource-parser`, header credentials, explicit application-committed resume
+IDs, bounded parsing/retry and staged snapshot completion. This solves limits of
+the native EventSource API without replacing SSE with WebSockets. Keep flechette
+unless cross-language Arrow fixtures expose unsupported types or compression.
+Bulk analytical reads belong on the binary query interfaces; base64 SSE adds
+about one third to Arrow payload size before HTTP compression.
+
+### Exact Arrow values
+
+The decoder preserves 64-bit integers as `BigInt`, decimals as unscaled integer
+coefficients, and timestamps as integers in the Arrow field's declared unit.
+Use the schema's decimal scale and timestamp unit/timezone when formatting.
+This changes the previous implicit conversion to JavaScript numbers, which can
+fail for large integers or lose decimal/timestamp precision. Pass explicit
+`arrowOptions` to the consumer (or a second argument to `decodeArrowIPC`) if your
+application intentionally wants flechette's number/date conversion options.
+
+`npm run test:browser:fixture` runs the actual local SDK in Chromium, Firefox and
+WebKit, using Apache Arrow JS as an independent wire encoder. It checks nullable
+duplicates, Unicode, exact int64 values, fragmented events, reconnect and terminal
+closure. This local HTTP fixture does not replace the deployed TLS/browser gate.
+
+`npm run test:types` checks this SDK's public types with dependency declaration
+checking disabled: flechette 2.7.1 currently declares an untyped `getFactory`
+member. Keep that upstream typing limitation visible when upgrading the decoder.
