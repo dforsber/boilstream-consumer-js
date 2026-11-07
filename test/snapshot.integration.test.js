@@ -126,6 +126,74 @@ if (process.env.SSE_TEST_UNTRUSTED) {
     assert.equal(c.cursor, 'r1.next');
   });
 
+  for (const failure of ['commit', 'discard', 'refresh']) {
+    test(`failed refresh ${failure} callback cannot activate or reuse a generation`, { timeout: 5000 }, async t => {
+      let staged = [], active = [], discards = 0, refreshes = 0, batches = 0;
+      const s = await server(t, (_req, res, n) => {
+        headers(res);
+        const interrupted = event('schema', schema) + event('snapshot', ipc) +
+          event('refresh-required', '{"reason":"refresh_required"}') +
+          event('snapshot-complete', '{}', 'r1.invalid');
+        res.end((n === 1 && failure !== 'commit' ? interrupted : initial) +
+          event('batch', ipc, 'r1.queued'));
+      });
+      const c = new BoilStreamSnapshotConsumer(s.url, defaults({
+        onSnapshot: rows => { staged.push(...rows.getChild('value')); },
+        onSnapshotComplete: async () => {
+          assert.equal(c.cursor, undefined);
+          await turn();
+          throw new Error(TOKEN); // The application's transaction never commits.
+        },
+        onSnapshotDiscard: async () => {
+          discards++; staged = [];
+          assert.equal(c.cursor, undefined);
+          assert.equal(c.schema, null);
+          await turn();
+          if (failure === 'discard') throw new Error(TOKEN);
+        },
+        onRefreshRequired: async () => {
+          refreshes++;
+          assert.equal(c.cursor, undefined);
+          assert.equal(c.schema, null);
+          await turn();
+          if (failure === 'refresh') throw new Error(TOKEN);
+        },
+        onBatch: () => { batches++; },
+      }));
+      t.after(() => c.close());
+      await assert.rejects(c.run(), error => error instanceof StreamError &&
+        error.code === 'application_failed' && !error.message.includes(TOKEN));
+      assert.deepEqual([discards, refreshes, batches, s.requests.length], [1, 1, 0, 1]);
+      assert.deepEqual(staged, []);
+      assert.deepEqual(active, []);
+      assert.equal(c.cursor, undefined);
+      assert.equal(c.schema, null);
+      await assert.rejects(c.run(), { code: 'already_started' });
+      assert.equal(s.requests.length, 1, 'failed generation must not reconnect');
+
+      // Recovery is an explicit new generation. It requests a complete snapshot
+      // without the failed cursor, retains duplicate/NULL rows and commits once.
+      let commits = 0;
+      const replacement = new BoilStreamSnapshotConsumer(s.url, defaults({
+        onSnapshotStart: () => { staged = []; },
+        onSnapshot: rows => { staged.push(...rows.getChild('value')); },
+        onSnapshotComplete: async () => {
+          assert.equal(replacement.cursor, undefined);
+          await turn(); active = staged; commits++; replacement.close();
+        },
+        onSnapshotDiscard: () => assert.fail('replacement commit was discarded'),
+        onBatch: () => assert.fail('queued data crossed explicit close'),
+        onRefreshRequired: () => assert.fail('valid replacement failed'),
+      }));
+      t.after(() => replacement.close());
+      await replacement.run();
+      assert.equal(commits, 1);
+      assert.deepEqual(active, [11, null, 11]);
+      assert.equal(replacement.cursor, 'r1.base');
+      assert.deepEqual(s.requests.map(r => r.headers['last-event-id']), [undefined, undefined]);
+    });
+  }
+
   test('persistent 401 has one renewal attempt and terminal state invalidation', { timeout: 5000 }, async t => {
     let refreshed = 0;
     const s = await server(t, (_req, res) => { res.writeHead(401); res.end(TOKEN); });
