@@ -6,7 +6,7 @@
  * Requires a running BoilStream server with valid tokens.
  *
  * Usage:
- *   NODE_TLS_REJECT_UNAUTHORIZED=0 \
+ *   NODE_EXTRA_CA_CERTS=/path/to/test-ca.pem \
  *   STREAM_TOKEN=<hex> INGEST_TOKEN=<hex> \
  *   node test/consumer.test.js
  */

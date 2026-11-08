@@ -2,18 +2,54 @@
 
 Real-time Arrow data streaming for browsers and Node.js via Server-Sent Events (SSE).
 
-Connects to a [BoilStream](https://boilstream.com) SSE endpoint and delivers decoded [Apache Arrow](https://arrow.apache.org/) tables using [flechette](https://github.com/uwdata/flechette). Automatic reconnection with `Last-Event-ID` is handled by `EventSource` for ordinary network interruptions. Cursor IDs are opaque strings and must be preserved verbatim.
+Use `BoilStreamSnapshotConsumer` for the **SSE v2 preview**: an initial Arrow
+snapshot, live batches, and reconnects from the last application-committed opaque
+cursor. `BoilStreamConsumer` remains available for the legacy live-only endpoint.
+Both use the pinned [flechette](https://github.com/uwdata/flechette) Arrow decoder.
 
-## Install
+## Install the GitHub preview
+
+The compatible repository version is **0.2.0**, not yet published to npm. The
+published 0.1.0 package is incompatible with the current cursor protocol; do not
+use an unversioned `npm install boilstream-consumer` for this server.
+Install the qualified runtime revision explicitly:
 
 ```bash
-npm install boilstream-consumer
+npm install 'github:dforsber/boilstream-consumer-js#7aba7554b9703a0c406a5b8eaf484b2b743b8ec3'
 ```
 
-## Quick Start
+Use Node.js 22.12 or later. For browsers, import the package through your bundler.
+Start with the [v2 snapshot client](#experimental-snapshot-client-sse-v2) below;
+its callbacks must stage, activate and commit application state with each cursor.
 
-The repository candidate is 0.2.0 (legacy SSE protocol); this change does not publish it to npm.
-Requires Node.js 22.12 or later when using the Node EventSource implementation.
+## Run the browser example
+
+```bash
+git clone https://github.com/dforsber/boilstream-consumer-js.git
+cd boilstream-consumer-js
+npm ci
+npm run example:browser
+```
+
+Open `http://127.0.0.1:8787`, enter your `/stream/v2` endpoint and stream token,
+and select **Fresh snapshot**. Allow that origin in the server's CORS settings;
+allow `Authorization` and `Last-Event-ID` and expose `X-Boilstream-SSE-Version`.
+The browser must trust the server certificate. The example serves only local
+lockfile dependencies; it does not fetch a floating decoder from a CDN.
+
+The [example](examples/browser-test.html) uses the actual SDK. It stages snapshot
+rows until completion, commits rows and cursor together, preserves duplicate/NULL
+values, and invalidates state on refresh or decode/application failure. **Stop**
+retains state for **Resume retained state** on the same endpoint. Reloading loses
+both state and cursor. Its 10,000-row/one-million-JSON-character limits are demo bounds, not a production store;
+use bounded transactional storage such as IndexedDB for a real application.
+Tokens stay in memory and Authorization headers, never page URLs or browser storage.
+Supply a new token manually when needed; this demo does not implement your login flow.
+
+## Legacy live-only examples
+
+These examples use `/stream/{token}` and do not supply existing snapshot rows.
+EventSource callbacks must be synchronous; use v2 for awaited application commits.
 
 ### Node.js
 
@@ -47,7 +83,7 @@ const consumer = new BoilStreamConsumer("https://host:8443/stream/<token>", {
 });
 ```
 
-See [`examples/browser-test.html`](examples/browser-test.html) for a standalone browser demo.
+The browser demo above uses v2; these EventSource snippets are legacy only.
 
 ## API
 
@@ -165,8 +201,8 @@ member. Keep that upstream typing limitation visible when upgrading the decoder.
 
 `BoilStreamSnapshotConsumer` requires the new server `/stream/v2` endpoint and an
 explicit `x-boilstream-sse-version: 2` response. It refuses the legacy endpoint.
-The server candidate is still undergoing native/security qualification; this
-export does not declare SSE GA. No npm publication is included in this change.
+The reliable preview is qualified locally against server main `389f80212`; this
+export does not declare SSE GA. No npm publication is included.
 
 ```js
 import { BoilStreamSnapshotConsumer } from 'boilstream-consumer';
@@ -224,8 +260,9 @@ claim exhaustive validation of hostile FlatBuffers internals or every Arrow type
 Local verification uses independent Apache Arrow JS encoding, actual TLS Fetch and
 EventSource transports, and the actual SDK in Chromium/Firefox/WebKit with CORS,
 credential renewal and partial snapshot restart. The public type fixture includes
-both clients. Actual BoilStream server, deployed proxy/TLS, RLS revocation and soak
-remain separate qualification gates.
+both clients. The actual native-server gate below also passed. Deployed proxy/TLS,
+cluster resilience and sustained load remain separate production gates. Governed
+streaming RLS/CLS is future work; current streams refuse governed sources.
 
 ### Combined browser/server qualification
 
@@ -247,11 +284,12 @@ TLS certificate and speaks HTTP/2. An untrusted-CA negative control must fail.
 This is local integration evidence, not qualification of browser-facing deployment
 TLS, a production proxy configuration, cluster failover or sustained load.
 
-On 2026-11-07, all three engines passed the combined gate on macOS against the
-SSE server candidate and its existing native build. Each engine checks snapshot
+On 2026-11-08, all six snapshot/recovery cases passed on macOS in Chromium,
+Firefox and WebKit against the merged native baseline. The previously failing
+Quack replay cases also passed. Server main `389f80212` contains this qualified
+preview; SDK runtime `7aba755` is the matching client. Each engine checks snapshot
 restart/renewal, live commit, failed application processing and exact replay.
-The server's newer native selection has a separate ingestion-fixture failure;
-these results do not qualify that selection or promote SSE to GA.
+These results qualify the local preview, not production GA.
 
 The same server target also runs recovery scenarios. To select only those cases:
 
@@ -265,3 +303,17 @@ idle cancellation with server registration cleanup. On macOS, all three engines
 passed these cases and the original three snapshot scenarios. A temporary
 extra-retry mutation failed the real Chromium test and was restored. These are
 bounded failure tests, not sustained-load or cluster-failover qualification.
+
+### Example validation
+
+`npm run test:example` drives the shipped demo in Chromium, Firefox and WebKit
+against independent Apache Arrow JS fixtures. It checks private snapshot staging,
+exact duplicate/NULL rows, paired cursor commits, stop/resume, refresh, malformed
+Arrow refusal and absence of credentials in URLs/storage. It serves the real SDK
+and the installed dependencies, not a mock consumer.
+
+`npm run test:browser` is an optional live-server smoke of this same v2 demo via
+a loopback proxy with verified server TLS. Set `SERVER_URL`, matching `STREAM_TOKEN`
+and `INGEST_TOKEN` for a quiet fixture topic, and `NODE_EXTRA_CA_CERTS` for a private
+CA. It writes three fixture rows. `npm test` remains a legacy EventSource smoke;
+neither command replaces `make test-sse-browser` in the server repository.

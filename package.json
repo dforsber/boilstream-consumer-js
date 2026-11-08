@@ -16,6 +16,8 @@
   "scripts": {
     "test": "node test/consumer.test.js",
     "test:browser": "node test/browser.test.js",
+    "example:browser": "node examples/serve.mjs",
+    "test:example": "node --test test/browser-example.test.js test/browser-live-smoke.test.js",
     "test:unit": "node --test test/consumer.unit.test.js test/decoder.interop.test.js",
     "test:integration": "node test/run-transport-tests.js",
     "test:types": "tsc --noEmit --strict --skipLibCheck --module nodenext --target es2022 test/types.test.ts",

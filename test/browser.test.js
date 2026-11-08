@@ -1,190 +1,61 @@
 #!/usr/bin/env node
+// Optional live-server smoke of the actual v2 example. Requires a quiet append-only
+// fixture topic, matching tokens and NODE_EXTRA_CA_CERTS for a private test CA.
+// Browser -> loopback HTTP proxy -> verified server HTTPS; not deployed-edge qualification.
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import https from 'node:https';
+import { once } from 'node:events';
+import { chromium } from 'playwright';
+import { tableFromColumns, columnFromArray, utf8, tableToIPC } from '@uwdata/flechette';
+import { serveExample } from '../examples/serve.mjs';
 
-/**
- * BoilStream Consumer Browser Test (Playwright)
- *
- * Verifies the SDK works in a real browser environment.
- * Uses a local proxy with normal TLS verification. Configure a trusted CA.
- *
- * Usage:
- *   NODE_EXTRA_CA_CERTS=/path/to/test-ca.pem \
- *   STREAM_TOKEN=<hex> INGEST_TOKEN=<hex> \
- *   node test/browser.test.js
- */
-
-import http from "node:http";
-import https from "node:https";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { chromium } from "playwright";
-import { tableFromColumns, columnFromArray, utf8, tableToIPC } from "@uwdata/flechette";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-const STREAM_TOKEN = process.env.STREAM_TOKEN;
-const INGEST_TOKEN = process.env.INGEST_TOKEN;
-const SERVER_URL = process.env.SERVER_URL || "https://localhost:8443";
-
-if (!STREAM_TOKEN || !INGEST_TOKEN) {
-  console.error(
-    "Usage: STREAM_TOKEN=<hex> INGEST_TOKEN=<hex> node test/browser.test.js",
-  );
-  process.exit(1);
-}
-
-// Local server that serves the test HTML page AND proxies SSE requests
-// The proxy must trust the upstream CA; never disable certificate verification.
-function startServer() {
-  return new Promise((resolve) => {
-    const server = http.createServer((req, res) => {
-      // Proxy SSE stream requests to the real server
-      if (req.url.startsWith("/stream/")) {
-        const targetUrl = new URL(req.url, SERVER_URL);
-        const options = {
-          hostname: targetUrl.hostname,
-          port: targetUrl.port,
-          path: targetUrl.pathname,
-          method: "GET",
-          headers: {
-            Accept: "text/event-stream",
-            "Cache-Control": "no-cache",
-          },
-          rejectUnauthorized: true,
-        };
-
-        // Forward Last-Event-ID if present
-        if (req.headers["last-event-id"]) {
-          options.headers["Last-Event-ID"] = req.headers["last-event-id"];
-        }
-
-        const proxyReq = https.request(options, (proxyRes) => {
-          res.writeHead(proxyRes.statusCode, {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-          });
-          proxyRes.pipe(res);
-        });
-
-        proxyReq.on("error", (err) => {
-          console.error("  Proxy error:", err.message);
-          res.writeHead(502);
-          res.end("Proxy error");
-        });
-
-        req.on("close", () => proxyReq.destroy());
-        proxyReq.end();
-        return;
-      }
-
-      // Serve the test HTML page
-      const filePath = path.join(__dirname, "../examples/browser-test.html");
-      const content = fs.readFileSync(filePath, "utf-8");
-      res.writeHead(200, { "Content-Type": "text/html" });
-      res.end(content);
-    });
-
-    server.listen(0, "127.0.0.1", () => {
-      const port = server.address().port;
-      resolve({ server, port });
-    });
+const { STREAM_TOKEN, INGEST_TOKEN, SERVER_URL = 'https://localhost:8443' } = process.env;
+assert.ok(STREAM_TOKEN && INGEST_TOKEN, 'Set STREAM_TOKEN and INGEST_TOKEN for the same quiet fixture topic');
+assert.notEqual(process.env.NODE_TLS_REJECT_UNAUTHORIZED, '0', 'TLS verification must remain enabled');
+const upstream = new URL(SERVER_URL);
+assert.equal(upstream.protocol, 'https:');
+const server = createServer((req, res) => {
+  if (req.url !== '/stream/v2' || req.method !== 'GET') return serveExample(req, res);
+  const headers = { accept: 'text/event-stream' };
+  for (const name of ['authorization', 'last-event-id']) if (req.headers[name]) headers[name] = req.headers[name];
+  const request = https.request(new URL('/stream/v2', upstream), { headers, rejectUnauthorized: true }, response => {
+    res.writeHead(response.statusCode, response.headers); response.pipe(res);
   });
-}
-
-async function ingestTestData() {
+  request.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+  res.on('close', () => request.destroy());
+  request.end();
+});
+let browser;
+try {
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  browser = await chromium.launch();
+  const page = await browser.newPage();
+  await page.goto(origin);
+  await page.locator('#endpoint').fill(`${origin}/stream/v2`);
+  await page.locator('#token').fill(STREAM_TOKEN);
+  await page.locator('#start').click();
+  await page.waitForFunction(() => document.querySelector('#status').textContent === 'live');
+  const baseline = Number(await page.locator('#rows').textContent());
   const table = tableFromColumns({
     id: columnFromArray(Int32Array.from([1, 2, 3])),
-    name: columnFromArray(["alice", "bob", "charlie"], utf8()),
+    name: columnFromArray(['alice', 'bob', 'charlie'], utf8()),
     value: columnFromArray(Float64Array.from([1.1, 2.2, 3.3])),
   });
-  const ipcBytes = tableToIPC(table, { format: "stream" });
-
-  const url = `${SERVER_URL}/ingest/${INGEST_TOKEN}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/vnd.apache.arrow.stream" },
-    body: ipcBytes,
+  const response = await fetch(new URL(`/ingest/${INGEST_TOKEN}`, upstream), {
+    method: 'POST', headers: { 'content-type': 'application/vnd.apache.arrow.stream' },
+    body: tableToIPC(table, { format: 'stream' }), signal: AbortSignal.timeout(10000),
   });
-
-  if (!res.ok) {
-    throw new Error(`Ingest failed: ${res.status} ${await res.text()}`);
-  }
-  console.log("  Ingested 3 rows");
+  assert.ok(response.ok, `Fixture ingestion status ${response.status}`);
+  await page.waitForFunction(expected => Number(document.querySelector('#rows').textContent) === expected, baseline + 3);
+  assert.match(await page.locator('#cursor').textContent(), /^r1\./);
+  await page.locator('#stop').click();
+  await page.waitForFunction(() => document.querySelector('#status').textContent === 'stopped');
+  assert.equal(new URL(page.url()).search, '');
+  console.log('PASS actual v2 browser example: complete snapshot, three live rows, committed cursor, disposal');
+} finally {
+  await browser?.close();
+  server.closeAllConnections();
+  await new Promise(resolve => server.close(resolve));
 }
-
-async function runBrowserTest() {
-  console.log("\n=== BoilStream Browser Test (Playwright) ===\n");
-
-  // Start local server (file serving + SSE proxy)
-  const { server, port } = await startServer();
-  const localUrl = `http://127.0.0.1:${port}`;
-  console.log(`  Local server on ${localUrl}`);
-
-  let browser;
-  try {
-    // Launch headless Chromium
-    browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext();
-    const page = await context.newPage();
-
-    // Listen for console messages from the page
-    page.on("console", (msg) => {
-      console.log(`  [browser] ${msg.text()}`);
-    });
-
-    // Navigate to test page — SSE connects through the local proxy, not directly to HTTPS
-    const testUrl = `${localUrl}/?SERVER_URL=${encodeURIComponent(localUrl)}&STREAM_TOKEN=${STREAM_TOKEN}`;
-    console.log("  Opening browser test page (credentials redacted)");
-    await page.goto(testUrl);
-
-    // Wait for consumer to register, then ingest data
-    console.log("  Waiting for SSE connection...");
-    await new Promise((r) => setTimeout(r, 3000));
-
-    console.log("  Ingesting test data...");
-    await ingestTestData();
-
-    // Wait for #status to become "done" (up to 15s)
-    console.log("  Waiting for browser to receive batches...");
-    await page.waitForFunction(
-      () => {
-        const el = document.getElementById("status");
-        return el && (el.textContent === "done" || el.textContent === "error");
-      },
-      { timeout: 15000 },
-    );
-
-    // Read results from DOM
-    const status = await page.$eval("#status", (el) => el.textContent);
-    const schema = await page.$eval("#schema", (el) => el.textContent);
-    const rows = await page.$eval("#rows", (el) => el.textContent);
-
-    console.log("\n=== Results ===");
-    console.log(`  Status: ${status}`);
-    console.log(`  Schema: ${schema}`);
-    console.log(`  Rows:   ${rows}`);
-
-    // Assertions
-    const errors = [];
-    if (status !== "done") errors.push(`Status is '${status}', expected 'done'`);
-    if (schema === "-") errors.push("No schema received");
-    if (parseInt(rows) < 3) errors.push(`Expected >= 3 rows, got ${rows}`);
-
-    if (errors.length > 0) {
-      console.error("\nFAILED:", errors.join("; "));
-      process.exit(1);
-    }
-
-    console.log("\nAll browser assertions passed!");
-  } finally {
-    if (browser) await browser.close();
-    server.close();
-  }
-}
-
-runBrowserTest().catch((err) => {
-  console.error("\nBrowser test failed:", err.message || err);
-  process.exit(1);
-});
