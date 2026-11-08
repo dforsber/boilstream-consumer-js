@@ -9,13 +9,12 @@ Both use the pinned [flechette](https://github.com/uwdata/flechette) Arrow decod
 
 ## Install the GitHub preview
 
-The compatible repository version is **0.2.0**, not yet published to npm. The
-published 0.1.0 package is incompatible with the current cursor protocol; do not
-use an unversioned `npm install boilstream-consumer` for this server.
-Install the qualified runtime revision explicitly:
+The compatible client version is **0.2.0**. Install the annotated GitHub release
+explicitly. The older npm 0.1.0 package is incompatible with the current cursor
+protocol; it must not be used with this server.
 
 ```bash
-npm install 'github:dforsber/boilstream-consumer-js#7aba7554b9703a0c406a5b8eaf484b2b743b8ec3'
+npm install 'github:dforsber/boilstream-consumer-js#v0.2.0'
 ```
 
 Use Node.js 22.12 or later. For browsers, import the package through your bundler.
